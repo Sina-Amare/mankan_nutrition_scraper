@@ -33,13 +33,19 @@ ENV/
 *.swo
 *~
 
-# Project specific
-data/checkpoints/*.json
-data/logs/*.log
-output/*.xlsx
-output/*.csv
+# Project specific - Data and output files
+data/checkpoints/
+data/logs/
+data/search_page_checkpoint.json
+data/food_ids*.txt
+output/
 *.xlsx
 *.csv
+
+# Temporary files
+*.tmp
+*.bak
+*_links.txt
 
 # OS
 .DS_Store
