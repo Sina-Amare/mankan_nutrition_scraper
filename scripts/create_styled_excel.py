@@ -1,5 +1,11 @@
 """Create a clean, styled Excel file from the CSV data matching the image format."""
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import (
@@ -10,10 +16,10 @@ from openpyxl.styles import (
     Side,
 )
 from openpyxl.utils import get_column_letter
-from pathlib import Path
 
-# Read CSV
-csv_path = Path("output/mankan_nutritional_data.csv")
+# Read CSV (from project root)
+project_root = Path(__file__).parent.parent
+csv_path = project_root / "output/mankan_nutritional_data.csv"
 df = pd.read_csv(csv_path, encoding='utf-8-sig')
 
 print(f"Loaded {len(df)} rows from CSV")
@@ -178,8 +184,8 @@ for row_idx in range(2, ws.max_row + 1):
             if cell.fill.start_color.index == "00000000":  # Only if no fill
                 cell.fill = LIGHT_FILL
 
-# Save workbook
-output_path = Path("output/mankan_nutritional_data_styled.xlsx")
+# Save workbook (to project root output directory)
+output_path = project_root / "output/mankan_nutritional_data_styled.xlsx"
 wb.save(output_path)
 
 print(f"Created styled Excel file: {output_path}")
