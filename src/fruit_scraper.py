@@ -84,12 +84,12 @@ class FruitScraper:
             return None
     
     def get_fruit_name(self, page: Page) -> str:
-        """Get fruit name from page.
+        """Get fruit name from page with question pattern cleaning.
         
         Args:
             page: Playwright Page object
         Returns:
-            Fruit name
+            Fruit name (cleaned of question patterns)
         """
         # Try multiple selectors for fruit name
         selectors = [
@@ -111,6 +111,16 @@ class FruitScraper:
                     if text and len(text) > 2 and len(text) < 200 and not text.startswith("Fruit"):
                         # Remove common prefixes/suffixes
                         text = text.replace("کالری:", "").replace("قند:", "").replace("فیبر:", "").strip()
+                        
+                        # Remove question patterns like "کالری موز چقدر است؟" -> "موز"
+                        text = re.sub(r'^کالری\s+(.+?)\s+چقدر\s+است\??\s*$', r'\1', text, flags=re.IGNORECASE)
+                        text = re.sub(r'^کالری\s+(.+?)\s+چقدر\??\s*$', r'\1', text, flags=re.IGNORECASE)
+                        text = re.sub(r'^(.+?)\s+چقدر\s+است\??\s*$', r'\1', text, flags=re.IGNORECASE)
+                        text = re.sub(r'^(.+?)\s+چند\s+کالری\s+دارد\??\s*$', r'\1', text, flags=re.IGNORECASE)
+                        text = re.sub(r'^بانک\s+غذایی\s*\|\s*(.+?)$', r'\1', text, flags=re.IGNORECASE)
+                        text = re.sub(r'\s+(چقدر|است|هست|چند|دارد|کالری)\??\s*$', '', text, flags=re.IGNORECASE)
+                        text = re.sub(r'\s+', ' ', text).strip()
+                        
                         if text and len(text) > 2:
                             return text
             except:
@@ -129,18 +139,18 @@ class FruitScraper:
         return f"Fruit {fruit_id}"
     
     def extract_fruit_values(self, page: Page) -> Dict[str, Optional[float]]:
-        """Extract fruit nutritional values (calories, sugar, fiber, salt).
+        """Extract fruit nutritional values (calories, sugar, fiber only).
         
         Args:
             page: Playwright Page object
         Returns:
-            Dictionary with calories, sugar_g, fiber_g, salt_g
+            Dictionary with calories, sugar_g, fiber_g (salt_g is always 0.0 for fruits)
         """
         values = {
             "calories": None,
             "sugar_g": None,
             "fiber_g": None,
-            "salt_g": None,
+            # NOTE: salt_g is NOT extracted for fruits - always 0.0
         }
         
         try:
@@ -152,7 +162,36 @@ class FruitScraper:
             text = body.inner_text()
             html = body.inner_html()
             
-            # Method 1: Extract from HTML structure (more reliable)
+            # Method 1: Extract from ID-based selectors (PRIMARY - most reliable for fruit pages)
+            # Fruit pages use: #calory-amount, #carbo-amount (for sugar), #fiber-amount
+            try:
+                # Calories from #calory-amount
+                cal_elem = page.query_selector("#calory-amount")
+                if cal_elem:
+                    text = cal_elem.inner_text().strip()
+                    nums = re.findall(r'\d+\.?\d*', text)
+                    if nums:
+                        values["calories"] = float(nums[0])
+                
+                # Sugar (قند) from #carbo-amount (note: fruit pages use carbo-amount ID for sugar!)
+                sugar_elem = page.query_selector("#carbo-amount")
+                if sugar_elem:
+                    text = sugar_elem.inner_text().strip()
+                    nums = re.findall(r'\d+\.?\d*', text)
+                    if nums:
+                        values["sugar_g"] = float(nums[0])
+                
+                # Fiber from #fiber-amount
+                fiber_elem = page.query_selector("#fiber-amount")
+                if fiber_elem:
+                    text = fiber_elem.inner_text().strip()
+                    nums = re.findall(r'\d+\.?\d*', text)
+                    if nums:
+                        values["fiber_g"] = float(nums[0])
+            except Exception as e:
+                logger.debug(f"Error in ID-based extraction: {e}")
+            
+            # Method 2: Fallback - Extract from organics div (for search result pages)
             # Look for the organics div structure: <div class="organics">کالری: <span class="amount">50<sub>Cal</sub></span>...
             try:
                 organics_div = page.query_selector('.organics, [class*="organic"]')
@@ -160,46 +199,37 @@ class FruitScraper:
                     org_text = organics_div.inner_text()
                     org_html = organics_div.inner_html()
                     
-                    # Extract calories - look for pattern: کالری: 50Cal or <span class="amount">50<sub>Cal</sub></span>
-                    cal_match = re.search(r'کالری[:\s]*(\d+\.?\d*)\s*Cal?', org_text, re.IGNORECASE)
-                    if not cal_match:
-                        # Try HTML pattern
-                        cal_html_match = re.search(r'کالری[:\s]*<span[^>]*>(\d+\.?\d*)<sub>Cal', org_html, re.IGNORECASE)
+                    # Only use as fallback if ID-based extraction didn't work
+                    if values["calories"] is None:
+                        cal_html_match = re.search(r'کالری[:\s]*<span[^>]*class=["\']amount["\'][^>]*>(\d+\.?\d*)<sub>Cal', org_html, re.IGNORECASE | re.DOTALL)
                         if cal_html_match:
                             values["calories"] = float(cal_html_match.group(1))
-                    else:
-                        values["calories"] = float(cal_match.group(1))
+                        else:
+                            cal_match = re.search(r'کالری[:\s]*(\d+\.?\d*)\s*Cal', org_text, re.IGNORECASE)
+                            if cal_match:
+                                values["calories"] = float(cal_match.group(1))
                     
-                    # Extract sugar (قند)
-                    sugar_match = re.search(r'قند[:\s]*(\d+\.?\d*)\s*g', org_text, re.IGNORECASE)
-                    if not sugar_match:
-                        sugar_html_match = re.search(r'قند[:\s]*<span[^>]*>(\d+\.?\d*)<sub>g', org_html, re.IGNORECASE)
+                    if values["sugar_g"] is None:
+                        sugar_html_match = re.search(r'قند[:\s]*<span[^>]*class=["\']amount["\'][^>]*>(\d+\.?\d*)<sub>g', org_html, re.IGNORECASE | re.DOTALL)
                         if sugar_html_match:
                             values["sugar_g"] = float(sugar_html_match.group(1))
-                    else:
-                        values["sugar_g"] = float(sugar_match.group(1))
+                        else:
+                            sugar_match = re.search(r'قند[:\s]*(\d+\.?\d*)\s*g\b', org_text, re.IGNORECASE)
+                            if sugar_match:
+                                values["sugar_g"] = float(sugar_match.group(1))
                     
-                    # Extract fiber (فیبر)
-                    fiber_match = re.search(r'فیبر[:\s]*(\d+\.?\d*)\s*g', org_text, re.IGNORECASE)
-                    if not fiber_match:
-                        fiber_html_match = re.search(r'فیبر[:\s]*<span[^>]*>(\d+\.?\d*)<sub>g', org_html, re.IGNORECASE)
+                    if values["fiber_g"] is None:
+                        fiber_html_match = re.search(r'فیبر[:\s]*<span[^>]*class=["\']amount["\'][^>]*>(\d+\.?\d*)<sub>g', org_html, re.IGNORECASE | re.DOTALL)
                         if fiber_html_match:
                             values["fiber_g"] = float(fiber_html_match.group(1))
-                    else:
-                        values["fiber_g"] = float(fiber_match.group(1))
-                    
-                    # Extract salt (نمک) - may not be available for fruits
-                    salt_match = re.search(r'نمک[:\s]*(\d+\.?\d*)\s*g', org_text, re.IGNORECASE)
-                    if not salt_match:
-                        salt_html_match = re.search(r'نمک[:\s]*<span[^>]*>(\d+\.?\d*)<sub>g', org_html, re.IGNORECASE)
-                        if salt_html_match:
-                            values["salt_g"] = float(salt_html_match.group(1))
-                    else:
-                        values["salt_g"] = float(salt_match.group(1))
+                        else:
+                            fiber_match = re.search(r'فیبر[:\s]*(\d+\.?\d*)\s*g\b', org_text, re.IGNORECASE)
+                            if fiber_match:
+                                values["fiber_g"] = float(fiber_match.group(1))
             except Exception as e:
                 logger.debug(f"Error extracting from organics div: {e}")
             
-            # Method 2: Extract from text patterns (fallback)
+            # Method 3: Extract from text patterns (fallback)
             # Pattern: کالری: 50Cal, قند: 8g, فیبر: 1.6g
             if values["calories"] is None:
                 cal_patterns = [
@@ -231,44 +261,60 @@ class FruitScraper:
                             continue
             
             if values["fiber_g"] is None:
+                # Try more flexible patterns for fiber
                 fiber_patterns = [
                     r'فیبر[:\s]*(\d+\.?\d*)\s*g\b',
+                    r'فیبر[:\s]*(\d+\.?\d*)\s*g',
                     r'فیبر[:\s]*(\d+\.?\d*)',
                 ]
                 for pattern in fiber_patterns:
                     match = re.search(pattern, text, re.IGNORECASE)
                     if match:
                         try:
-                            values["fiber_g"] = float(match.group(1))
-                            break
+                            val = float(match.group(1))
+                            if 0 <= val <= 100:  # Reasonable range for fiber
+                                values["fiber_g"] = val
+                                break
                         except:
                             continue
             
-            # Method 2: Try to find elements with class "amount" (from search result structure)
-            # The search results show: <span class="amount">50<sub>Cal</sub></span>
+            # Method 4: Try to find elements with class "amount" and match by context
+            # The structure: <div class="organics">کالری: <span class="amount">50<sub>Cal</sub></span>قند: <span class="amount">8<sub>g</sub></span>فیبر: <span class="amount">1.6<sub>g</sub></span>
             try:
-                # Look for calories in span.amount elements
-                amount_elements = page.query_selector_all('.amount')
-                for elem in amount_elements:
-                    text_content = elem.inner_text().strip()
-                    # Check if it contains Cal (calories)
-                    if 'Cal' in text_content or 'کالری' in elem.get_attribute('class') or '':
+                organics_div = page.query_selector('.organics, [class*="organic"]')
+                if organics_div:
+                    # Get all amount spans with their parent context
+                    amount_spans = organics_div.query_selector_all('span.amount')
+                    for span in amount_spans:
+                        text_content = span.inner_text().strip()
+                        # Get the text before this span to identify what it represents
+                        parent_text = span.evaluate("""
+                            (span) => {
+                                let text = '';
+                                let node = span.previousSibling;
+                                while (node && node.nodeType === 3) { // Text node
+                                    text = node.textContent + text;
+                                    node = node.previousSibling;
+                                }
+                                return text.trim();
+                            }
+                        """)
+                        
                         nums = re.findall(r'\d+\.?\d*', text_content)
-                        if nums and values["calories"] is None:
-                            values["calories"] = float(nums[0])
-            except:
+                        if nums:
+                            val = float(nums[0])
+                            
+                            # Match by preceding text
+                            if 'کالری' in parent_text and values["calories"] is None:
+                                values["calories"] = val
+                            elif 'قند' in parent_text and values["sugar_g"] is None:
+                                values["sugar_g"] = val
+                            elif 'فیبر' in parent_text and values["fiber_g"] is None:
+                                values["fiber_g"] = val
+            except Exception as e:
+                logger.debug(f"Error in Method 3 extraction: {e}")
                 pass
             
-            # Method 3: Try ID-based selectors (same as food pages)
-            try:
-                cal_elem = page.query_selector("#calory-amount, .cal, [id*='calor']")
-                if cal_elem and values["calories"] is None:
-                    text = cal_elem.inner_text().strip()
-                    nums = re.findall(r'\d+\.?\d*', text)
-                    if nums:
-                        values["calories"] = float(nums[0])
-            except:
-                pass
             
             logger.debug(f"Extracted fruit values: {values}")
             
@@ -295,21 +341,21 @@ class FruitScraper:
             fruit_name = self.get_fruit_name(page)
             values = self.extract_fruit_values(page)
             
-            # Fruits typically have one measurement (100g or per piece)
-            # Create a single row for the fruit
-            # Set missing values to 0 for compatibility with existing Excel structure
+            # Fruits have one measurement: always 100g
+            # Only extract: name, measurement (100g), calories, sugar, fiber
+            # All other fields are set to 0.0
             row = {
                 "food_id": fruit_id,
                 "food_name": fruit_name,
-                "measurement_unit": "100 گرم",  # Default for fruits
+                "measurement_unit": "100 گرم",  # Always 100g for fruits
                 "measurement_value": 100.0,
                 "calories": values.get("calories") or 0.0,
-                "fat_g": 0.0,  # Fruits don't have fat, set to 0
-                "protein_g": 0.0,  # Fruits don't have protein, set to 0
-                "carbs_g": 0.0,  # Fruits don't have carbs breakdown, set to 0
+                "fat_g": 0.0,  # Fruits don't have fat - always 0
+                "protein_g": 0.0,  # Fruits don't have protein - always 0
+                "carbs_g": 0.0,  # Fruits don't have carbs breakdown - always 0
                 "fiber_g": values.get("fiber_g") or 0.0,
-                "sugar_g": values.get("sugar_g") or 0.0,  # Sugar from fruit data
-                "salt_g": values.get("salt_g") or 0.0,  # Salt from fruit data (usually 0)
+                "sugar_g": values.get("sugar_g") or 0.0,
+                "salt_g": 0.0,  # Fruits don't have salt - always 0
             }
             
             # Clean and validate
