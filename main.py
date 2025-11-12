@@ -159,7 +159,7 @@ def main():
         logger.info(f"Skipped items: {len(scraper.skipped_ids)}")
         if scraper.skipped_ids:
             logger.info(f"  Skipped items log: data/logs/skipped_items.json")
-            logger.info(f"  Use 'python retry_skipped.py' to retry skipped items")
+            logger.info(f"  Use 'python scripts/retry_skipped.py' to retry skipped items")
         logger.info("=" * 60)
         
     except KeyboardInterrupt:
