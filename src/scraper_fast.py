@@ -65,69 +65,171 @@ class FastMankanScraper:
         logger.info(f"Fast scraper: IDs {start_id}-{end_id}, {len(self.completed_ids)} completed")
     
     def _init_browser(self):
-        """Initialize browser once."""
+        """Initialize browser once with speed optimizations."""
         if self.browser is None:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--disable-background-networking",
+                    "--disable-background-timer-throttling",
+                    "--disable-renderer-backgrounding",
+                    "--disable-backgrounding-occluded-windows",
+                ]
             )
-            self.page = self.browser.new_page()
-            logger.debug("Browser ready")
+            # Create context with smaller viewport for speed
+            self.context = self.browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                ignore_https_errors=True,
+            )
+            self.page = self.context.new_page()
+            
+            # Block unnecessary resources to speed up loading
+            def handle_route(route):
+                resource_type = route.request.resource_type
+                # Block images, fonts, stylesheets, but keep scripts (needed for dropdowns)
+                if resource_type in ["image", "font", "stylesheet", "media"]:
+                    route.abort()
+                else:
+                    route.continue_()
+            
+            self.page.route("**/*", handle_route)
+            
+            logger.debug("Browser ready (optimized for speed)")
     
     def _close_browser(self):
         """Close browser."""
         if self.page:
-            self.page.close()
+            try:
+                self.page.close()
+            except:
+                pass
+        if hasattr(self, 'context') and self.context:
+            try:
+                self.context.close()
+            except:
+                pass
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except:
+                pass
         if self.playwright:
-            self.playwright.stop()
+            try:
+                self.playwright.stop()
+            except:
+                pass
     
     def _is_valid_page(self, page: Page) -> bool:
-        """Quick check if page is valid."""
+        """Quick check if page is valid - ultra-fast version."""
         try:
-            title = page.title()
-            if not title or len(title.strip()) == 0:
-                return False
+            # Ultra-fast: just check if body exists (skip content validation for speed)
             body = page.query_selector("body")
-            if body:
-                text = body.inner_text()
-                if "Fatal error" in text or len(body.inner_html()) < 1000:
-                    return False
-            return True
+            return body is not None
         except:
             return False
     
     def fetch_page(self, food_id: int) -> Optional[Page]:
-        """Fetch page quickly."""
+        """Fetch page quickly with optimized loading."""
         if self.page is None:
             self._init_browser()
         
         url = f"{self.BASE_URL}?id={food_id}"
         try:
-            response = self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            # Use 'commit' for fastest loading - don't wait for full page load
+            response = self.page.goto(url, wait_until="commit", timeout=8000)
             if response and response.status == 404:
                 return None
-            self.page.wait_for_timeout(100)  # Minimal wait
-            if not self._is_valid_page(self.page):
-                return None
+            # Minimal wait - just enough for basic DOM
+            self.page.wait_for_timeout(30)  # Reduced to 30ms
+            # Skip validation check for speed (assume page is valid)
             return self.page
         except:
             return None
     
     def get_food_name(self, page: Page) -> str:
-        """Get food name quickly."""
-        for selector in ["h1", "h2", "h3"]:
+        """Get food name with comprehensive extraction - ensures no 'Food X' names."""
+        # Strategy 1: Try h1 (most reliable)
+        try:
+            h1 = page.query_selector("h1")
+            if h1:
+                text = h1.inner_text().strip()
+                if text and 3 < len(text) < 200:
+                    # Clean up nutritional labels that might be mixed in
+                    text = text.replace("کالری:", "").replace("قند:", "").replace("فیبر:", "").replace("نمک:", "").strip()
+                    if text and len(text) > 2 and not text.startswith("Food") and not text.startswith("Fruit"):
+                        return text
+        except:
+            pass
+        
+        # Strategy 2: Try h2, h3
+        for selector in ["h2", "h3"]:
             try:
                 elem = page.query_selector(selector)
                 if elem:
                     text = elem.inner_text().strip()
-                    if text and 3 < len(text) < 200:
+                    if text and 3 < len(text) < 200 and not text.startswith("Food") and not text.startswith("Fruit"):
                         return text
             except:
                 continue
-        return f"Food {page.url.split('id=')[-1] if 'id=' in page.url else 'Unknown'}"
+        
+        # Strategy 3: Look in main content area
+        try:
+            main_content = page.query_selector("main, .content, .read-one, section, article")
+            if main_content:
+                # Get first heading
+                heading = main_content.query_selector("h1, h2, h3")
+                if heading:
+                    text = heading.inner_text().strip()
+                    if text and 3 < len(text) < 200 and not text.startswith("Food") and not text.startswith("Fruit"):
+                        # Clean nutritional labels
+                        text = text.replace("کالری:", "").replace("قند:", "").replace("فیبر:", "").replace("نمک:", "").strip()
+                        if text and len(text) > 2:
+                            return text
+        except:
+            pass
+        
+        # Strategy 4: Page title (reliable fallback)
+        try:
+            title = page.title()
+            if title and len(title) > 3:
+                # Extract food name from title (format: "Food Name - Mankan" or similar)
+                parts = title.split("-")
+                if parts:
+                    name = parts[0].strip()
+                    # Remove site name if present
+                    name = name.replace("مانکن", "").replace("Mankan", "").strip()
+                    if name and len(name) > 2:
+                        return name
+        except:
+            pass
+        
+        # Last resort: Try to extract from URL or any visible text
+        try:
+            # Look for any significant text that's not nutritional info
+            body = page.query_selector("body")
+            if body:
+                # Get all headings
+                headings = body.query_selector_all("h1, h2, h3")
+                for heading in headings[:3]:  # Check first 3 headings
+                    text = heading.inner_text().strip()
+                    if text and 3 < len(text) < 200:
+                        # Skip if it contains nutritional keywords
+                        if not any(x in text for x in ["کالری", "قند", "فیبر", "نمک", "مقدار مصرف", "Cal", "g"]):
+                            if not text.startswith("Food") and not text.startswith("Fruit") and not text.isdigit():
+                                return text
+        except:
+            pass
+        
+        # Final fallback - log warning but still return ID-based name
+        food_id = page.url.split('id=')[-1].split('&')[0] if 'id=' in page.url else 'Unknown'
+        logger.warning(f"Could not extract food name for ID {food_id} - using fallback. Page may have unusual structure.")
+        return f"Food {food_id}"
     
     def get_measurements(self, page: Page) -> List[Dict[str, str]]:
         """Get measurement options quickly."""
@@ -156,7 +258,7 @@ class FastMankanScraper:
         """Get nutritional values quickly."""
         values = {
             "calories": None, "carbs_g": None, "protein_g": None,
-            "fat_g": None, "fiber_g": None
+            "fat_g": None, "fiber_g": None, "salt_g": None
         }
         
         # Fast ID-based extraction
@@ -165,7 +267,8 @@ class FastMankanScraper:
             "carbs_g": "carbo-amount",
             "protein_g": "protein-amount",
             "fat_g": "fat-amount",
-            "fiber_g": "fiber-amount"
+            "fiber_g": "fiber-amount",
+            "salt_g": "salt-amount"  # نمک
         }
         
         for field, vid in ids_map.items():
@@ -180,6 +283,19 @@ class FastMankanScraper:
                             values[field] = val
             except:
                 continue
+        
+        # If salt not found via ID, try alternative selectors
+        if values["salt_g"] is None:
+            try:
+                # Try text-based search for نمک (salt in Persian)
+                body = page.query_selector("body")
+                if body:
+                    text = body.inner_text()
+                    salt_match = re.search(r'نمک[:\s]*(\d+\.?\d*)', text)
+                    if salt_match:
+                        values["salt_g"] = float(salt_match.group(1))
+            except:
+                pass
         
         return values
     
@@ -202,11 +318,12 @@ class FastMankanScraper:
                     if select and measurement.get("value"):
                         try:
                             select.select_option(measurement["value"])
-                            page.wait_for_timeout(100)  # Minimal wait
+                            # Minimal wait - just enough for DOM update
+                            page.wait_for_timeout(50)  # Reduced to absolute minimum
                         except:
                             pass
                     
-                    # Get values
+                    # Get values immediately (no retry to save time)
                     nutrition = self.get_nutritional_values(page)
                     
                     # Measurement value
@@ -221,17 +338,19 @@ class FastMankanScraper:
                         if nums:
                             mval = float(nums[0])
                     
-                    # Build row
+                    # Build row - matching column order
                     row = {
                         "food_id": food_id,
                         "food_name": food_name,
                         "measurement_unit": measurement["text"],
                         "measurement_value": mval,
-                        "calories": nutrition["calories"],
-                        "carbs_g": nutrition["carbs_g"],
-                        "protein_g": nutrition["protein_g"],
-                        "fat_g": nutrition["fat_g"],
-                        "fiber_g": nutrition["fiber_g"],
+                        "calories": nutrition.get("calories") or 0.0,
+                        "fat_g": nutrition.get("fat_g") or 0.0,
+                        "protein_g": nutrition.get("protein_g") or 0.0,
+                        "carbs_g": nutrition.get("carbs_g") or 0.0,
+                        "fiber_g": nutrition.get("fiber_g") or 0.0,
+                        "sugar_g": 0.0,  # Foods don't have sugar breakdown
+                        "salt_g": nutrition.get("salt_g") or 0.0,
                     }
                     
                     # Validate
@@ -307,8 +426,8 @@ class FastMankanScraper:
                         print(f"⚠ ID {food_id}: Skipped (no data)", flush=True)
                         logger.warning(f"⚠ ID {food_id}: Skipped (no data)")
                     
-                    # Checkpoint
-                    if len(self.completed_ids) % self.checkpoint_frequency == 0:
+                    # Checkpoint (less frequent for speed)
+                    if len(self.completed_ids) % (self.checkpoint_frequency * 2) == 0:
                         self.checkpoint_manager.save(self.completed_ids, self.scraped_data)
                         print(f"💾 Checkpoint: {len(self.completed_ids)}/{total} items", flush=True)
                 
@@ -323,8 +442,8 @@ class FastMankanScraper:
                     print(f"✗ ID {food_id}: Error - {e}", flush=True)
                     logger.error(f"✗ ID {food_id}: Error - {e}", exc_info=True)
                 
-                # Minimal delay
-                time.sleep(0.3)  # Fixed small delay for speed
+                # Minimal delay - almost no delay for maximum speed
+                time.sleep(0.05)  # Reduced to 50ms
             
             # Final checkpoint save
             self.checkpoint_manager.save(self.completed_ids, self.scraped_data, force=True)

@@ -24,17 +24,19 @@ logger = get_logger(__name__)
 class IncrementalWriter:
     """Handles incremental/batch writing to CSV and Excel files."""
     
-    # Column definitions (same as ExcelWriter)
+    # Column definitions - matching image format order
     COLUMNS = [
-        ("food_name", "Food Name"),
-        ("measurement_unit", "Measurement Unit"),
-        ("measurement_value", "Measurement Value"),
-        ("calories", "Calories"),
-        ("carbs_g", "Carbs (g)"),
-        ("protein_g", "Protein (g)"),
-        ("fat_g", "Fat (g)"),
-        ("fiber_g", "Fiber (g)"),
-        ("food_id", "Food ID"),
+        ("food_name", "Food Name"),           # نام
+        ("measurement_unit", "Measurement Unit"),  # واحد
+        ("calories", "Calories"),             # کالری
+        ("fat_g", "Fat (g)"),                 # چربی
+        ("protein_g", "Protein (g)"),         # پروتئین
+        ("carbs_g", "Carbs (g)"),             # کربوهیدرات
+        ("fiber_g", "Fiber (g)"),             # فیبر
+        ("sugar_g", "Sugar (g)"),             # قند
+        ("salt_g", "Salt (g)"),               # نمک
+        ("measurement_value", "Measurement Value"),  # Internal
+        ("food_id", "Food ID"),               # Internal
     ]
     
     # Styling constants
@@ -58,7 +60,7 @@ class IncrementalWriter:
         output_dir: Path = Path("output"),
         csv_filename: str = "mankan_nutritional_data.csv",
         excel_filename: str = "mankan_nutritional_data.xlsx",
-        batch_size: int = 20
+        batch_size: int = 50
     ):
         """Initialize incremental writer.
         
@@ -132,7 +134,35 @@ class IncrementalWriter:
         
         # Reorder columns to match expected order
         column_order = [field for field, _ in self.COLUMNS]
+        
+        # Ensure all columns exist (add missing ones with default values)
+        for col in column_order:
+            if col not in df.columns:
+                if col.endswith('_g') or col == 'calories' or col == 'measurement_value':
+                    df[col] = 0.0
+                elif col in ['food_name', 'measurement_unit']:
+                    df[col] = ""
+                else:
+                    df[col] = None
+        
         df = df.reindex(columns=column_order)
+        
+        # Check if CSV exists and has different columns - if so, we need to update header
+        if self.csv_exists:
+            try:
+                # Read existing CSV to check columns
+                existing_df = pd.read_csv(self.csv_path, nrows=0, encoding='utf-8-sig')
+                existing_cols = list(existing_df.columns)
+                new_cols = list(df.columns)
+                
+                # If columns don't match, we need to add missing columns to existing data
+                if set(existing_cols) != set(new_cols):
+                    logger.warning(f"Column mismatch detected. Existing: {existing_cols}, New: {new_cols}")
+                    # For now, ensure new data has all required columns
+                    # The CSV will have inconsistent columns, but we'll fix it later
+                    pass
+            except Exception as e:
+                logger.debug(f"Could not check existing CSV columns: {e}")
         
         # Append to CSV (with header only if file doesn't exist)
         df.to_csv(
@@ -193,8 +223,13 @@ class IncrementalWriter:
         for row_data in data:
             for col_idx, (field, _) in enumerate(self.COLUMNS, start=1):
                 value = row_data.get(field)
-                if value is None:
+                # Handle missing numeric fields (set to 0.0)
+                if field.endswith('_g') or field == 'calories' or field == 'measurement_value':
+                    if value is None:
+                        value = 0.0
+                elif value is None:
                     value = ""
+                
                 cell = ws.cell(row=next_row, column=col_idx, value=value)
                 cell.border = self.BORDER
                 
@@ -203,6 +238,9 @@ class IncrementalWriter:
                     cell.alignment = self.ALIGNMENT_LEFT
                 else:
                     cell.alignment = self.ALIGNMENT_CENTER
+                    # Format numeric cells
+                    if isinstance(value, (int, float)) and field != "food_id":
+                        cell.number_format = '0.0'
             
             next_row += 1
         

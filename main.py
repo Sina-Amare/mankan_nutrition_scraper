@@ -7,6 +7,7 @@ from pathlib import Path
 from src.checkpoint import CheckpointManager
 from src.logger_config import setup_logger
 from src.scraper_fast import FastMankanScraper
+from src.scraper_parallel import ParallelScraper
 from src.search_page_scraper import SearchPageScraper
 
 logger = setup_logger()
@@ -90,6 +91,14 @@ def parse_arguments():
         help="Scrape search pages first to get all valid food IDs (recommended)"
     )
     
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Use parallel scraping with N workers (default: 0 = sequential). Recommended: 4-8 for maximum speed"
+    )
+    
     return parser.parse_args()
 
 
@@ -131,22 +140,49 @@ def main():
             search_scraper.save_food_ids(food_ids)
             logger.info("=" * 60)
         
-        scraper = FastMankanScraper(
-            start_id=args.start_id,
-            end_id=args.end_id,
-            checkpoint_manager=checkpoint_manager,
-            checkpoint_frequency=args.checkpoint_frequency,
-            output_dir=output_dir,
-            csv_filename=args.csv_filename,
-            excel_filename=args.excel_filename,
-        )
-        
-        # Run scraper (data is saved incrementally during scraping)
-        logger.info("=" * 60)
-        logger.info("Step 2: Starting scraping process...")
-        logger.info("Data will be saved incrementally to CSV and Excel files.")
-        logger.info("=" * 60)
-        scraped_data = scraper.scrape_all(food_ids=food_ids)
+        # Choose scraper based on parallel option
+        if args.parallel > 0:
+            logger.info(f"Using PARALLEL scraping with {args.parallel} workers")
+            scraper = ParallelScraper(
+                num_workers=args.parallel,
+                checkpoint_manager=checkpoint_manager,
+                output_dir=output_dir,
+                csv_filename=args.csv_filename,
+                excel_filename=args.excel_filename,
+            )
+            
+            # Run parallel scraper
+            logger.info("=" * 60)
+            logger.info("Step 2: Starting PARALLEL scraping process...")
+            logger.info("Data will be saved incrementally to CSV and Excel files.")
+            logger.info("=" * 60)
+            
+            if food_ids:
+                scraped_data = scraper.scrape_all(food_ids)
+            else:
+                # Generate IDs from range
+                food_ids = list(range(args.start_id, args.end_id + 1))
+                scraped_data = scraper.scrape_all(food_ids)
+            
+            skipped_ids = []
+        else:
+            scraper = FastMankanScraper(
+                start_id=args.start_id,
+                end_id=args.end_id,
+                checkpoint_manager=checkpoint_manager,
+                checkpoint_frequency=args.checkpoint_frequency,
+                output_dir=output_dir,
+                csv_filename=args.csv_filename,
+                excel_filename=args.excel_filename,
+            )
+            
+            # Run scraper (data is saved incrementally during scraping)
+            logger.info("=" * 60)
+            logger.info("Step 2: Starting scraping process...")
+            logger.info("Data will be saved incrementally to CSV and Excel files.")
+            logger.info("=" * 60)
+            scraped_data = scraper.scrape_all(food_ids=food_ids)
+            skipped_ids = scraper.skipped_ids
         
         # Print summary
         logger.info("=" * 60)
@@ -156,8 +192,8 @@ def main():
         logger.info(f"Total data rows: {len(scraped_data)}")
         logger.info(f"Excel file: {output_dir / args.excel_filename}")
         logger.info(f"CSV file: {output_dir / args.csv_filename}")
-        logger.info(f"Skipped items: {len(scraper.skipped_ids)}")
-        if scraper.skipped_ids:
+        logger.info(f"Skipped items: {len(skipped_ids)}")
+        if skipped_ids:
             logger.info(f"  Skipped items log: data/logs/skipped_items.json")
             logger.info(f"  Use 'python scripts/retry_skipped.py' to retry skipped items")
         logger.info("=" * 60)

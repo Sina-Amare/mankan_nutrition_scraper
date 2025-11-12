@@ -19,10 +19,12 @@ class DataProcessor:
     
     NUMERIC_FIELDS = [
         "calories",
-        "carbs_g",
-        "protein_g",
         "fat_g",
+        "protein_g",
+        "carbs_g",
         "fiber_g",
+        "sugar_g",
+        "salt_g",
         "measurement_value"
     ]
     

@@ -35,12 +35,15 @@ ws.title = "Nutritional Data"
 # Persian column headers (matching the image format)
 headers = [
     ("ردیف", "Row"),  # Row number
-    ("نام غذا", "Food Name"),
-    ("واحد", "Unit"),
-    ("کالری", "Calories"),
-    ("چربی", "Fat"),
-    ("پروتئین", "Protein"),
-    ("کربوهیدرات", "Carbohydrates"),
+    ("نام غذا", "Food Name"),  # نام
+    ("واحد", "Unit"),  # واحد
+    ("کالری", "Calories"),  # کالری
+    ("چربی", "Fat"),  # چربی
+    ("پروتئین", "Protein"),  # پروتئین
+    ("کربوهیدرات", "Carbohydrates"),  # کربوهیدرات
+    ("فیبر", "Fiber"),  # فیبر
+    ("قند", "Sugar"),  # قند
+    ("نمک", "Salt"),  # نمک
 ]
 
 # Styling constants
@@ -124,10 +127,22 @@ for idx, row_data in df.iterrows():
     ws.cell(row=data_row, column=6, value=round(protein, 1) if pd.notna(protein) else "")
     
     # Column 7: Carbohydrates (کربوهیدرات)
-    carbs = row_data['carbs_g']
-    ws.cell(row=data_row, column=7, value=round(carbs, 1) if pd.notna(carbs) else "")
+    carbs = row_data.get('carbs_g', 0)
+    ws.cell(row=data_row, column=7, value=round(carbs, 1) if pd.notna(carbs) else 0)
     
-    # Apply styling to all cells in this row
+    # Column 8: Fiber (فیبر)
+    fiber = row_data.get('fiber_g', 0)
+    ws.cell(row=data_row, column=8, value=round(fiber, 1) if pd.notna(fiber) else 0)
+    
+    # Column 9: Sugar (قند)
+    sugar = row_data.get('sugar_g', 0)
+    ws.cell(row=data_row, column=9, value=round(sugar, 1) if pd.notna(sugar) else 0)
+    
+    # Column 10: Salt (نمک)
+    salt = row_data.get('salt_g', 0)
+    ws.cell(row=data_row, column=10, value=round(salt, 1) if pd.notna(salt) else 0)
+    
+    # Apply styling to all cells in this row (including new columns)
     for col_idx in range(1, len(headers) + 1):
         cell = ws.cell(row=data_row, column=col_idx)
         cell.border = BORDER
@@ -154,6 +169,9 @@ column_widths = {
     5: 10,  # Fat
     6: 12,  # Protein
     7: 15,  # Carbohydrates
+    8: 10,  # Fiber
+    9: 10,  # Sugar
+    10: 10,  # Salt
 }
 
 for col_idx, width in column_widths.items():
