@@ -37,7 +37,10 @@ ENV/
 data/checkpoints/
 data/logs/
 data/search_page_checkpoint.json
+data/fruit_search_page_checkpoint.json
+data/fruit_scraping_checkpoint.json
 data/food_ids*.txt
+data/fruit_ids*.txt
 output/
 *.xlsx
 *.csv
