@@ -162,6 +162,24 @@ class FastMankanScraper:
                 if text and 3 < len(text) < 200:
                     # Clean up nutritional labels that might be mixed in
                     text = text.replace("کالری:", "").replace("قند:", "").replace("فیبر:", "").replace("نمک:", "").strip()
+                    
+                    # Remove question patterns like "کالری موز چقدر است؟" -> "موز"
+                    # Patterns: "کالری X چقدر است؟", "X چقدر است؟", "کالری X چقدر؟"
+                    question_patterns = [
+                        r'^کالری\s+(.+?)\s+چقدر\s+است\??$',
+                        r'^کالری\s+(.+?)\s+چقدر\??$',
+                        r'^(.+?)\s+چقدر\s+است\??$',
+                        r'^(.+?)\s+کالری\s+چقدر\s+است\??$',
+                    ]
+                    for pattern in question_patterns:
+                        match = re.match(pattern, text, re.IGNORECASE)
+                        if match:
+                            text = match.group(1).strip()
+                            break
+                    
+                    # Remove common question words at the end
+                    text = re.sub(r'\s+(چقدر|است|هست|می\s*باشد)\??\s*$', '', text, flags=re.IGNORECASE)
+                    
                     if text and len(text) > 2 and not text.startswith("Food") and not text.startswith("Fruit"):
                         return text
         except:
@@ -173,8 +191,22 @@ class FastMankanScraper:
                 elem = page.query_selector(selector)
                 if elem:
                     text = elem.inner_text().strip()
-                    if text and 3 < len(text) < 200 and not text.startswith("Food") and not text.startswith("Fruit"):
-                        return text
+                    if text and 3 < len(text) < 200:
+                        # Clean question patterns
+                        question_patterns = [
+                            r'^کالری\s+(.+?)\s+چقدر\s+است\??$',
+                            r'^کالری\s+(.+?)\s+چقدر\??$',
+                            r'^(.+?)\s+چقدر\s+است\??$',
+                        ]
+                        for pattern in question_patterns:
+                            match = re.match(pattern, text, re.IGNORECASE)
+                            if match:
+                                text = match.group(1).strip()
+                                break
+                        text = re.sub(r'\s+(چقدر|است|هست)\??\s*$', '', text, flags=re.IGNORECASE)
+                        
+                        if text and len(text) > 2 and not text.startswith("Food") and not text.startswith("Fruit"):
+                            return text
             except:
                 continue
         
@@ -186,10 +218,23 @@ class FastMankanScraper:
                 heading = main_content.query_selector("h1, h2, h3")
                 if heading:
                     text = heading.inner_text().strip()
-                    if text and 3 < len(text) < 200 and not text.startswith("Food") and not text.startswith("Fruit"):
+                    if text and 3 < len(text) < 200:
                         # Clean nutritional labels
                         text = text.replace("کالری:", "").replace("قند:", "").replace("فیبر:", "").replace("نمک:", "").strip()
-                        if text and len(text) > 2:
+                        # Clean question patterns
+                        question_patterns = [
+                            r'^کالری\s+(.+?)\s+چقدر\s+است\??$',
+                            r'^کالری\s+(.+?)\s+چقدر\??$',
+                            r'^(.+?)\s+چقدر\s+است\??$',
+                        ]
+                        for pattern in question_patterns:
+                            match = re.match(pattern, text, re.IGNORECASE)
+                            if match:
+                                text = match.group(1).strip()
+                                break
+                        text = re.sub(r'\s+(چقدر|است|هست)\??\s*$', '', text, flags=re.IGNORECASE)
+                        
+                        if text and len(text) > 2 and not text.startswith("Food") and not text.startswith("Fruit"):
                             return text
         except:
             pass
@@ -204,6 +249,19 @@ class FastMankanScraper:
                     name = parts[0].strip()
                     # Remove site name if present
                     name = name.replace("مانکن", "").replace("Mankan", "").strip()
+                    # Clean question patterns
+                    question_patterns = [
+                        r'^کالری\s+(.+?)\s+چقدر\s+است\??$',
+                        r'^کالری\s+(.+?)\s+چقدر\??$',
+                        r'^(.+?)\s+چقدر\s+است\??$',
+                    ]
+                    for pattern in question_patterns:
+                        match = re.match(pattern, name, re.IGNORECASE)
+                        if match:
+                            name = match.group(1).strip()
+                            break
+                    name = re.sub(r'\s+(چقدر|است|هست)\??\s*$', '', name, flags=re.IGNORECASE)
+                    
                     if name and len(name) > 2:
                         return name
         except:
@@ -255,20 +313,21 @@ class FastMankanScraper:
             return [{"value": "100", "text": "100 گرم"}]
     
     def get_nutritional_values(self, page: Page) -> Dict[str, Optional[float]]:
-        """Get nutritional values quickly."""
+        """Get nutritional values quickly - for FOODS only (no salt/sugar)."""
         values = {
             "calories": None, "carbs_g": None, "protein_g": None,
-            "fat_g": None, "fiber_g": None, "salt_g": None
+            "fat_g": None, "fiber_g": None
+            # NOTE: salt_g and sugar_g are NOT extracted for foods - always 0.0
         }
         
-        # Fast ID-based extraction
+        # Fast ID-based extraction - ONLY for foods (no salt extraction)
         ids_map = {
             "calories": "calory-amount",
             "carbs_g": "carbo-amount",
             "protein_g": "protein-amount",
             "fat_g": "fat-amount",
             "fiber_g": "fiber-amount",
-            "salt_g": "salt-amount"  # نمک
+            # salt_g removed - foods don't have salt breakdown
         }
         
         for field, vid in ids_map.items():
@@ -284,18 +343,7 @@ class FastMankanScraper:
             except:
                 continue
         
-        # If salt not found via ID, try alternative selectors
-        if values["salt_g"] is None:
-            try:
-                # Try text-based search for نمک (salt in Persian)
-                body = page.query_selector("body")
-                if body:
-                    text = body.inner_text()
-                    salt_match = re.search(r'نمک[:\s]*(\d+\.?\d*)', text)
-                    if salt_match:
-                        values["salt_g"] = float(salt_match.group(1))
-            except:
-                pass
+        # DO NOT extract salt for foods - it should always be 0.0
         
         return values
     
@@ -339,6 +387,7 @@ class FastMankanScraper:
                             mval = float(nums[0])
                     
                     # Build row - matching column order
+                    # IMPORTANT: For foods, sugar_g and salt_g are ALWAYS 0.0
                     row = {
                         "food_id": food_id,
                         "food_name": food_name,
@@ -349,8 +398,8 @@ class FastMankanScraper:
                         "protein_g": nutrition.get("protein_g") or 0.0,
                         "carbs_g": nutrition.get("carbs_g") or 0.0,
                         "fiber_g": nutrition.get("fiber_g") or 0.0,
-                        "sugar_g": 0.0,  # Foods don't have sugar breakdown
-                        "salt_g": nutrition.get("salt_g") or 0.0,
+                        "sugar_g": 0.0,  # Foods NEVER have sugar breakdown - always 0
+                        "salt_g": 0.0,   # Foods NEVER have salt breakdown - always 0
                     }
                     
                     # Validate
